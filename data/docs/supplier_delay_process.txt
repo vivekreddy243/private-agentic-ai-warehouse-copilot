@@ -1,0 +1,1 @@
+If a supplier shipment is delayed by more than 24 hours, warehouse operations staff must notify procurement, update the shipment dashboard, and review whether safety stock is sufficient for affected products.

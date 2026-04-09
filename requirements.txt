@@ -1,0 +1,14 @@
+streamlit
+fastapi
+uvicorn
+pydantic
+sqlalchemy
+pandas
+langgraph
+langchain
+langchain-community
+langchain-ollama
+qdrant-client
+pypdf
+python-multipart
+requests

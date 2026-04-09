@@ -1,0 +1,1 @@
+Inventory audits must be conducted every Friday evening. Staff should verify physical stock against the warehouse database, record discrepancies, and escalate missing high-value electronics to the warehouse manager.

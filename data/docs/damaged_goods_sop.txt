@@ -1,0 +1,1 @@
+﻿If a package arrives damaged, warehouse staff must take a photo, mark the item as damaged in the system, move it to the inspection shelf, and notify the supplier team within 24 hours.
