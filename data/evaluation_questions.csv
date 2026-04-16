@@ -1,0 +1,31 @@
+question,expected_tool,category,expected_behavior
+Which items are below reorder threshold?,inventory,inventory,Should return low-stock items with quantity threshold details
+What items are in low stock?,inventory,inventory,Should identify low-stock products only
+Which products need restocking?,inventory,inventory,Should return items below reorder threshold
+Where is Wireless Mouse stored?,inventory,inventory,Should return exact location and quantity for Wireless Mouse
+Where is Thermal Printer stored?,inventory,inventory,Should return exact location and quantity for Thermal Printer
+Who supplies the Thermal Printer?,inventory,inventory,Should return supplier name for Thermal Printer
+Show supplier information for warehouse products.,inventory,inventory,Should return supplier details from inventory table
+Which shipments are delayed?,shipment,shipment,Should return delayed shipments with shipment ID supplier and notes
+Show delayed shipments.,shipment,shipment,Should list delayed shipment rows only
+Are any supplier deliveries delayed?,shipment,shipment,Should detect delayed shipments from shipment table
+What is the status of shipments?,shipment,shipment,Should return shipment status summary or rows
+Which supplier has delayed shipments?,shipment,shipment,Should identify suppliers linked to delayed shipments
+What is the process for damaged goods?,document,document,Should retrieve damaged goods SOP content
+Summarize the returns policy.,document,document,Should retrieve returns policy document and summarize
+What should we do if a supplier shipment is delayed?,document,document,Should retrieve supplier delay process document
+What are the inventory audit guidelines?,document,document,Should retrieve inventory audit guidelines document
+Which items need restocking and are any shipments delayed?,"inventory|shipment",multi_intent,Should combine low-stock inventory and delayed shipment results
+Which low stock items may be affected by delayed shipments?,"inventory|shipment",multi_intent,Should combine low-stock and delayed shipment reasoning
+Show low stock products and explain the damaged goods process.,"inventory|document",multi_intent,Should combine inventory results with damaged goods SOP
+Which items are below reorder threshold and what are the inventory audit guidelines?,"inventory|document",multi_intent,Should combine low-stock products with audit guidance
+Which items should be restocked first?,decision,decision,Should return ranked restock priority with priority score
+Recommend top items to restock first.,decision,decision,Should use decision node and rank items
+What should be prioritized for replenishment?,decision,decision,Should provide decision-support ranking for restocking
+Which low stock items also have delayed supplier risk?,"inventory|shipment|decision",decision_multi,Should combine low-stock data shipment risk and prioritization
+Where is iPhone 16 stored?,inventory,negative,Should say no matching product found
+Who supplies MacBook Pro?,inventory,negative,Should say supplier information not available
+What is the forklift maintenance SOP?,document,negative,Should say no relevant document found
+Which shipment is arriving from Apple?,shipment,negative,Should say no matching shipment found
+Who supplies them?,inventory,follow_up,After low-stock question should resolve them to previous low-stock items
+Where are they stored?,inventory,follow_up,After low-stock question should resolve they to previous low-stock items

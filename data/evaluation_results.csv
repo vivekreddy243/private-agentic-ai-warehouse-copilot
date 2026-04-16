@@ -1,0 +1,182 @@
+question,expected_tool,selected_tools,tool_match,resolved_question,final_answer
+Which items are below reorder threshold?,inventory,inventory,YES,Which items are below reorder threshold?,"INVENTORY RESULT:
+    sku                        name  quantity  reorder_threshold location   supplier
+SKU-102         Mechanical Keyboard         8                 10  Rack-A2 KeyMasters
+SKU-104                Laptop Stand         5                  8  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones         4                  6  Rack-B2   SoundMax
+SKU-107                Portable SSD         6                 10  Rack-C1  DataStore
+SKU-108             Barcode Scanner         3            "
+What items are in low stock?,inventory,inventory,YES,What items are in low stock?,"INVENTORY RESULT:
+    sku                        name  quantity  reorder_threshold location   supplier
+SKU-102         Mechanical Keyboard         8                 10  Rack-A2 KeyMasters
+SKU-104                Laptop Stand         5                  8  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones         4                  6  Rack-B2   SoundMax
+SKU-107                Portable SSD         6                 10  Rack-C1  DataStore
+SKU-108             Barcode Scanner         3            "
+Which products need restocking?,inventory,inventory,YES,Which products need restocking?,"INVENTORY RESULT:
+    sku                        name  quantity  reorder_threshold location   supplier
+SKU-102         Mechanical Keyboard         8                 10  Rack-A2 KeyMasters
+SKU-104                Laptop Stand         5                  8  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones         4                  6  Rack-B2   SoundMax
+SKU-107                Portable SSD         6                 10  Rack-C1  DataStore
+SKU-108             Barcode Scanner         3            "
+Where is Wireless Mouse stored?,inventory,inventory,YES,Where is Wireless Mouse stored?,"INVENTORY RESULT:
+    sku           name location  quantity   supplier
+SKU-101 Wireless Mouse  Rack-A1        12 TechSupply"
+Where is Thermal Printer stored?,inventory,inventory,YES,Where is Thermal Printer stored?,"INVENTORY RESULT:
+    sku            name location  quantity supplier
+SKU-109 Thermal Printer  Rack-C3         2  PrintCo"
+Who supplies the Thermal Printer?,inventory,inventory,YES,Who supplies the Thermal Printer?,"INVENTORY RESULT:
+    sku                        name   supplier location  quantity
+SKU-101              Wireless Mouse TechSupply  Rack-A1        12
+SKU-102         Mechanical Keyboard KeyMasters  Rack-A2         8
+SKU-103                   USB-C Hub ConnectPro  Rack-A3        15
+SKU-104                Laptop Stand   ErgoDesk  Rack-B1         5
+SKU-105 Noise-Cancelling Headphones   SoundMax  Rack-B2         4
+SKU-106                      Webcam VisionTech  Rack-B3        10
+SKU-107             "
+Show supplier information for warehouse products.,inventory,inventory,YES,Show supplier information for warehouse products.,"INVENTORY RESULT:
+    sku                        name   supplier location  quantity
+SKU-101              Wireless Mouse TechSupply  Rack-A1        12
+SKU-102         Mechanical Keyboard KeyMasters  Rack-A2         8
+SKU-103                   USB-C Hub ConnectPro  Rack-A3        15
+SKU-104                Laptop Stand   ErgoDesk  Rack-B1         5
+SKU-105 Noise-Cancelling Headphones   SoundMax  Rack-B2         4
+SKU-106                      Webcam VisionTech  Rack-B3        10
+SKU-107             "
+Which shipments are delayed?,shipment,shipment,YES,Which shipments are delayed?,"SHIPMENT RESULT:
+shipment_id   supplier  status expected_date                                          notes
+   SHIP-001 TechSupply Delayed    2026-04-10 Wireless Mouse shipment delayed due to weather
+   SHIP-003   SoundMax Delayed    2026-04-11        Headphones shipment delayed by supplier"
+Show delayed shipments.,shipment,shipment,YES,Show delayed shipments.,"SHIPMENT RESULT:
+shipment_id   supplier  status expected_date                                          notes
+   SHIP-001 TechSupply Delayed    2026-04-10 Wireless Mouse shipment delayed due to weather
+   SHIP-003   SoundMax Delayed    2026-04-11        Headphones shipment delayed by supplier"
+Are any supplier deliveries delayed?,shipment,inventory|shipment,YES,Are any supplier deliveries delayed?,"INVENTORY RESULT:
+    sku                        name   supplier location  quantity
+SKU-101              Wireless Mouse TechSupply  Rack-A1        12
+SKU-102         Mechanical Keyboard KeyMasters  Rack-A2         8
+SKU-103                   USB-C Hub ConnectPro  Rack-A3        15
+SKU-104                Laptop Stand   ErgoDesk  Rack-B1         5
+SKU-105 Noise-Cancelling Headphones   SoundMax  Rack-B2         4
+SKU-106                      Webcam VisionTech  Rack-B3        10
+SKU-107             "
+What is the status of shipments?,shipment,shipment,YES,What is the status of shipments?,"SHIPMENT RESULT:
+shipment_id   supplier  status expected_date                                          notes
+   SHIP-001 TechSupply Delayed    2026-04-10 Wireless Mouse shipment delayed due to weather
+   SHIP-003   SoundMax Delayed    2026-04-11        Headphones shipment delayed by supplier"
+Which supplier has delayed shipments?,shipment,inventory|shipment,YES,Which supplier has delayed shipments?,"INVENTORY RESULT:
+    sku                        name   supplier location  quantity
+SKU-101              Wireless Mouse TechSupply  Rack-A1        12
+SKU-102         Mechanical Keyboard KeyMasters  Rack-A2         8
+SKU-103                   USB-C Hub ConnectPro  Rack-A3        15
+SKU-104                Laptop Stand   ErgoDesk  Rack-B1         5
+SKU-105 Noise-Cancelling Headphones   SoundMax  Rack-B2         4
+SKU-106                      Webcam VisionTech  Rack-B3        10
+SKU-107             "
+What is the process for damaged goods?,document,document,YES,What is the process for damaged goods?,"DOCUMENT RESULT:
+FILE: damaged_goods_sop.txt
+RELEVANCE SCORE: 6
+BEST MATCHING CONTENT:
+﻿If a package arrives damaged, warehouse staff must take a photo, mark the item as damaged in the system, move it to the inspection shelf, and notify the supplier team within 24 hours.
+
+FILE: returns_policy.txt
+RELEVANCE SCORE: 1
+BEST MATCHING CONTENT:
+Returned electronics must be inspected within 48 hours of arrival. Items with damaged packaging should be routed to manual review. Functional items can be resto"
+Summarize the returns policy.,document,document,YES,Summarize the returns policy.,"DOCUMENT RESULT:
+No relevant document content found."
+What should we do if a supplier shipment is delayed?,document,inventory|shipment,NO,What should we do if a supplier shipment is delayed?,"INVENTORY RESULT:
+    sku                        name   supplier location  quantity
+SKU-101              Wireless Mouse TechSupply  Rack-A1        12
+SKU-102         Mechanical Keyboard KeyMasters  Rack-A2         8
+SKU-103                   USB-C Hub ConnectPro  Rack-A3        15
+SKU-104                Laptop Stand   ErgoDesk  Rack-B1         5
+SKU-105 Noise-Cancelling Headphones   SoundMax  Rack-B2         4
+SKU-106                      Webcam VisionTech  Rack-B3        10
+SKU-107             "
+What are the inventory audit guidelines?,document,document,YES,What are the inventory audit guidelines?,"DOCUMENT RESULT:
+FILE: inventory_audit_guidelines.txt
+RELEVANCE SCORE: 8
+BEST MATCHING CONTENT:
+Inventory audits must be conducted every Friday evening. Staff should verify physical stock against the warehouse database, record discrepancies, and escalate missing high-value electronics to the warehouse manager."
+Which items need restocking and are any shipments delayed?,inventory|shipment,inventory|shipment,YES,Which items need restocking and are any shipments delayed?,"INVENTORY RESULT:
+    sku                        name  quantity  reorder_threshold location   supplier
+SKU-102         Mechanical Keyboard         8                 10  Rack-A2 KeyMasters
+SKU-104                Laptop Stand         5                  8  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones         4                  6  Rack-B2   SoundMax
+SKU-107                Portable SSD         6                 10  Rack-C1  DataStore
+SKU-108             Barcode Scanner         3            "
+Which low stock items may be affected by delayed shipments?,inventory|shipment,inventory|shipment,YES,Which low stock items may be affected by delayed shipments?,"INVENTORY RESULT:
+    sku                        name  quantity  reorder_threshold location   supplier
+SKU-102         Mechanical Keyboard         8                 10  Rack-A2 KeyMasters
+SKU-104                Laptop Stand         5                  8  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones         4                  6  Rack-B2   SoundMax
+SKU-107                Portable SSD         6                 10  Rack-C1  DataStore
+SKU-108             Barcode Scanner         3            "
+Show low stock products and explain the damaged goods process.,inventory|document,inventory|document,YES,Show low stock products and explain the damaged goods process.,"INVENTORY RESULT:
+    sku                        name  quantity  reorder_threshold location   supplier
+SKU-102         Mechanical Keyboard         8                 10  Rack-A2 KeyMasters
+SKU-104                Laptop Stand         5                  8  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones         4                  6  Rack-B2   SoundMax
+SKU-107                Portable SSD         6                 10  Rack-C1  DataStore
+SKU-108             Barcode Scanner         3            "
+Which items are below reorder threshold and what are the inventory audit guidelines?,inventory|document,inventory|document,YES,Which items are below reorder threshold and what are the inventory audit guidelines?,"INVENTORY RESULT:
+    sku                        name  quantity  reorder_threshold location   supplier
+SKU-102         Mechanical Keyboard         8                 10  Rack-A2 KeyMasters
+SKU-104                Laptop Stand         5                  8  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones         4                  6  Rack-B2   SoundMax
+SKU-107                Portable SSD         6                 10  Rack-C1  DataStore
+SKU-108             Barcode Scanner         3            "
+Which items should be restocked first?,decision,inventory|decision,YES,Which items should be restocked first?,"DECISION RESULT:
+    sku                        name  quantity  reorder_threshold   supplier  reorder_gap  sales_score  delay_risk_score  priority_score
+SKU-102         Mechanical Keyboard         8                 10 KeyMasters            2           60                 0            22.0
+SKU-107                Portable SSD         6                 10  DataStore            4           46                 0            21.8
+SKU-105 Noise-Cancelling Headphones         4                  6   SoundMax"
+Recommend top items to restock first.,decision,inventory|decision,YES,Recommend top items to restock first.,"DECISION RESULT:
+    sku                        name  quantity  reorder_threshold   supplier  reorder_gap  sales_score  delay_risk_score  priority_score
+SKU-102         Mechanical Keyboard         8                 10 KeyMasters            2           60                 0            22.0
+SKU-107                Portable SSD         6                 10  DataStore            4           46                 0            21.8
+SKU-105 Noise-Cancelling Headphones         4                  6   SoundMax"
+What should be prioritized for replenishment?,decision,inventory,NO,What should be prioritized for replenishment?,"INVENTORY RESULT:
+    sku                        name           category  quantity location   supplier
+SKU-101              Wireless Mouse        Electronics        12  Rack-A1 TechSupply
+SKU-102         Mechanical Keyboard        Electronics         8  Rack-A2 KeyMasters
+SKU-103                   USB-C Hub        Accessories        15  Rack-A3 ConnectPro
+SKU-104                Laptop Stand        Accessories         5  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones        Electronics   "
+Which low stock items also have delayed supplier risk?,inventory|shipment|decision,inventory|shipment,NO,Which low stock items also have delayed supplier risk?,"INVENTORY RESULT:
+    sku                        name  quantity  reorder_threshold location   supplier
+SKU-102         Mechanical Keyboard         8                 10  Rack-A2 KeyMasters
+SKU-104                Laptop Stand         5                  8  Rack-B1   ErgoDesk
+SKU-105 Noise-Cancelling Headphones         4                  6  Rack-B2   SoundMax
+SKU-107                Portable SSD         6                 10  Rack-C1  DataStore
+SKU-108             Barcode Scanner         3            "
+Where is iPhone 16 stored?,inventory,inventory,YES,Where is iPhone 16 stored?,"INVENTORY RESULT:
+No matching product location found."
+Who supplies MacBook Pro?,inventory,inventory,YES,Who supplies MacBook Pro?,"INVENTORY RESULT:
+    sku                        name   supplier location  quantity
+SKU-101              Wireless Mouse TechSupply  Rack-A1        12
+SKU-102         Mechanical Keyboard KeyMasters  Rack-A2         8
+SKU-103                   USB-C Hub ConnectPro  Rack-A3        15
+SKU-104                Laptop Stand   ErgoDesk  Rack-B1         5
+SKU-105 Noise-Cancelling Headphones   SoundMax  Rack-B2         4
+SKU-106                      Webcam VisionTech  Rack-B3        10
+SKU-107             "
+What is the forklift maintenance SOP?,document,document,YES,What is the forklift maintenance SOP?,"DOCUMENT RESULT:
+No relevant document content found."
+Which shipment is arriving from Apple?,shipment,shipment,YES,Which shipment is arriving from Apple?,"SHIPMENT RESULT:
+shipment_id   supplier  status expected_date                                          notes
+   SHIP-001 TechSupply Delayed    2026-04-10 Wireless Mouse shipment delayed due to weather
+   SHIP-003   SoundMax Delayed    2026-04-11        Headphones shipment delayed by supplier"
+Who supplies them?,inventory,inventory,YES,Who supplies them?,"INVENTORY RESULT:
+    sku                        name   supplier location  quantity
+SKU-101              Wireless Mouse TechSupply  Rack-A1        12
+SKU-102         Mechanical Keyboard KeyMasters  Rack-A2         8
+SKU-103                   USB-C Hub ConnectPro  Rack-A3        15
+SKU-104                Laptop Stand   ErgoDesk  Rack-B1         5
+SKU-105 Noise-Cancelling Headphones   SoundMax  Rack-B2         4
+SKU-106                      Webcam VisionTech  Rack-B3        10
+SKU-107             "
+Where are they stored?,inventory,inventory,YES,Where are they stored?,"INVENTORY RESULT:
+No matching product location found."

@@ -1,8 +1,15 @@
-import sqlite3
+import sys
 from pathlib import Path
+import sqlite3
+
+# Make project root importable so "app.agents..." works in Streamlit
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
 import streamlit as st
 import pandas as pd
-from langchain_ollama import ChatOllama
+from app.agents.langgraph_runner import run_langgraph_question
 
 DB_PATH = "data/warehouse.db"
 DOCS_DIR = Path("data/docs")
@@ -12,16 +19,8 @@ st.set_page_config(page_title="Private Agentic AI Copilot", layout="wide")
 st.title("Private Agentic AI Copilot for Warehouse Operations")
 st.caption("Electronics E-commerce Fulfillment Warehouse")
 
-llm = ChatOllama(model="gemma3:1b")
-
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-
-if "last_user_question" not in st.session_state:
-    st.session_state.last_user_question = ""
-
-if "last_inventory_result_df" not in st.session_state:
-    st.session_state.last_inventory_result_df = None
 
 
 # -----------------------------
@@ -63,375 +62,7 @@ def get_sales_df():
 
 
 # -----------------------------
-# FOLLOW-UP MEMORY HELPER
-# -----------------------------
-def resolve_followup_question(question: str) -> str:
-    q = question.lower().strip()
-    prev = st.session_state.last_user_question.lower().strip()
-
-    if not prev:
-        return question
-
-    followup_words = ["them", "those", "that", "those items", "those shipments", "it"]
-
-    if any(word in q for word in followup_words):
-        if "who supplies" in q and ("low stock" in prev or "reorder threshold" in prev):
-            return "Who supplies the items that are below reorder threshold?"
-        if ("where are" in q or "where is" in q) and ("low stock" in prev or "reorder threshold" in prev):
-            return "Where are the items that are below reorder threshold stored?"
-        if "what should we do" in q and "delayed" in prev:
-            return "What should we do if a supplier shipment is delayed?"
-        return f"{question} (follow-up to: {st.session_state.last_user_question})"
-
-    return question
-
-
-# -----------------------------
-# TOOLS
-# -----------------------------
-def inventory_tool(question: str):
-    df = get_products_df()
-    q = question.lower().strip()
-
-    if "low stock" in q or "below reorder threshold" in q or "restock" in q:
-        result = df[df["quantity"] < df["reorder_threshold"]][
-            ["sku", "name", "quantity", "reorder_threshold", "location", "supplier"]
-        ]
-        st.session_state.last_inventory_result_df = result.copy() if not result.empty else None
-
-        if result.empty:
-            return {
-                "name": "inventory",
-                "display_df": None,
-                "text_output": "No items are currently below reorder threshold."
-            }
-        return {
-            "name": "inventory",
-            "display_df": result,
-            "text_output": result.to_string(index=False)
-        }
-
-    elif "where is" in q or "where are" in q:
-        if ("them" in q or "those" in q) and st.session_state.last_inventory_result_df is not None:
-            result = st.session_state.last_inventory_result_df[["sku", "name", "location", "quantity", "supplier"]]
-        else:
-            search_term = (
-                q.replace("where is", "")
-                 .replace("where are", "")
-                 .replace("stored", "")
-                 .replace("?", "")
-                 .strip()
-            )
-            result = df[df["name"].str.lower().str.contains(search_term, na=False)][
-                ["sku", "name", "location", "quantity", "supplier"]
-            ]
-
-        if result.empty:
-            return {
-                "name": "inventory",
-                "display_df": None,
-                "text_output": "No matching product location found."
-            }
-        return {
-            "name": "inventory",
-            "display_df": result,
-            "text_output": result.to_string(index=False)
-        }
-
-    elif "supplier" in q or "who supplies" in q:
-        if ("them" in q or "those" in q) and st.session_state.last_inventory_result_df is not None:
-            base_df = st.session_state.last_inventory_result_df.copy()
-            available_cols = [c for c in ["sku", "name", "supplier", "location", "quantity"] if c in base_df.columns]
-            result = base_df[available_cols]
-        else:
-            result = df[["sku", "name", "supplier", "location", "quantity"]]
-
-        if result.empty:
-            return {
-                "name": "inventory",
-                "display_df": None,
-                "text_output": "No supplier information found for the requested items."
-            }
-        return {
-            "name": "inventory",
-            "display_df": result,
-            "text_output": result.to_string(index=False)
-        }
-
-    else:
-        result = df[["sku", "name", "category", "quantity", "location", "supplier"]]
-        return {
-            "name": "inventory",
-            "display_df": result,
-            "text_output": result.to_string(index=False)
-        }
-
-
-def shipment_tool(question: str):
-    df = get_shipments_df()
-    q = question.lower().strip()
-
-    if "delayed" in q or "shipment" in q or "delivery" in q:
-        result = df[df["status"].str.lower() == "delayed"][
-            ["shipment_id", "supplier", "status", "expected_date", "notes"]
-        ]
-        if result.empty:
-            return {
-                "name": "shipment",
-                "display_df": None,
-                "text_output": "No delayed shipments found."
-            }
-        return {
-            "name": "shipment",
-            "display_df": result,
-            "text_output": result.to_string(index=False)
-        }
-
-    result = df[["shipment_id", "supplier", "status", "expected_date", "notes"]]
-    return {
-        "name": "shipment",
-        "display_df": result,
-        "text_output": result.to_string(index=False)
-    }
-
-
-def document_tool(question: str):
-    q = question.lower().strip()
-    matched_docs = []
-
-    for file_path in DOCS_DIR.iterdir():
-        if file_path.is_file() and file_path.suffix.lower() == ".txt":
-            try:
-                content = file_path.read_text(encoding="utf-8", errors="ignore")
-                if any(word in content.lower() for word in q.split()):
-                    matched_docs.append({
-                        "filename": file_path.name,
-                        "content": content[:3000]
-                    })
-            except Exception:
-                continue
-
-    if not matched_docs:
-        return {
-            "name": "document",
-            "display_df": None,
-            "text_output": "No relevant document content found."
-        }
-
-    df = pd.DataFrame(
-        [{"filename": d["filename"], "preview": d["content"][:200]} for d in matched_docs]
-    )
-
-    combined_text = "\n\n".join(
-        [f"FILE: {d['filename']}\nCONTENT:\n{d['content']}" for d in matched_docs]
-    )
-
-    return {
-        "name": "document",
-        "display_df": df,
-        "text_output": combined_text
-    }
-
-
-# -----------------------------
-# DETERMINISTIC ANSWER HELPERS
-# -----------------------------
-def generate_inventory_answer(question: str, df: pd.DataFrame) -> str:
-    q = question.lower().strip()
-
-    if df is None or df.empty:
-        return "No matching inventory information found."
-
-    if "low stock" in q or "below reorder threshold" in q or "restock" in q:
-        lines = []
-        for _, row in df.iterrows():
-            lines.append(
-                f"{row['name']} is below threshold with quantity {row['quantity']} against reorder threshold {row['reorder_threshold']}. "
-                f"It is stored at {row['location']} and supplied by {row['supplier']}."
-            )
-        return "The following items need attention: " + " ".join(lines)
-
-    if "who supplies" in q or "supplier" in q:
-        lines = []
-        for _, row in df.iterrows():
-            supplier = row["supplier"] if "supplier" in df.columns else "unknown supplier"
-            lines.append(f"{row['name']} is supplied by {supplier}.")
-        return "Supplier information: " + " ".join(lines)
-
-    if "where is" in q or "where are" in q or "stored" in q or "location" in q:
-        lines = []
-        for _, row in df.iterrows():
-            lines.append(
-                f"{row['name']} is stored at {row['location']}. Current quantity is {row['quantity']}."
-            )
-        return "Storage details: " + " ".join(lines)
-
-    return ""
-
-
-def generate_shipment_answer(question: str, df: pd.DataFrame) -> str:
-    q = question.lower().strip()
-
-    if df is None or df.empty:
-        return "No matching shipment information found."
-
-    if "delayed" in q or "shipment" in q or "delivery" in q:
-        lines = []
-        for _, row in df.iterrows():
-            lines.append(
-                f"Shipment {row['shipment_id']} from {row['supplier']} is {row['status']} with expected date {row['expected_date']}. "
-                f"Notes: {row['notes']}."
-            )
-        return "Delayed shipment details: " + " ".join(lines)
-
-    return ""
-
-
-def should_use_deterministic_answer(resolved_question: str, selected_tools: list) -> bool:
-    q = resolved_question.lower()
-
-    # Process/policy/SOP style questions should go to the document + LLM path
-    document_priority_words = [
-        "sop", "policy", "process", "document", "instruction",
-        "guideline", "damaged", "return", "returns"
-    ]
-    if any(word in q for word in document_priority_words):
-        return False
-
-    deterministic_patterns = [
-        "low stock",
-        "below reorder threshold",
-        "restock",
-        "who supplies",
-        "supplier",
-        "where is",
-        "where are",
-        "stored",
-        "location",
-        "which shipments are delayed",
-        "show delayed shipments",
-        "delayed shipment",
-    ]
-
-    return any(pattern in q for pattern in deterministic_patterns)
-
-
-# -----------------------------
-# SIMPLE PLANNER
-# -----------------------------
-def planner(question: str):
-    q = question.lower()
-
-    inventory_words = ["stock", "threshold", "restock", "where is", "where are", "supplier", "location", "stored"]
-    shipment_words = ["shipment", "delayed", "delivery", "expected date"]
-    document_words = ["sop", "policy", "process", "document", "instruction", "guideline", "damaged", "return", "returns"]
-
-    # Document-first routing for pure process/policy/doc questions
-    if any(word in q for word in document_words) and not any(word in q for word in inventory_words + shipment_words):
-        return ["document"]
-
-    selected = []
-
-    if any(word in q for word in inventory_words):
-        selected.append("inventory")
-
-    if any(word in q for word in shipment_words):
-        selected.append("shipment")
-
-    if any(word in q for word in document_words):
-        selected.append("document")
-
-    if not selected:
-        selected = ["inventory"]
-
-    return selected
-
-
-def build_chat_history_text():
-    if not st.session_state.chat_history:
-        return "No previous conversation."
-
-    history_lines = []
-    for msg in st.session_state.chat_history[-6:]:
-        history_lines.append(f"{msg['role'].upper()}: {msg['content']}")
-    return "\n".join(history_lines)
-
-
-def run_agentic_flow(question: str):
-    resolved_question = resolve_followup_question(question)
-    selected_tools = planner(resolved_question)
-    tool_results = {}
-
-    if "inventory" in selected_tools:
-        tool_results["inventory"] = inventory_tool(resolved_question)
-
-    if "shipment" in selected_tools:
-        tool_results["shipment"] = shipment_tool(resolved_question)
-
-    if "document" in selected_tools:
-        tool_results["document"] = document_tool(resolved_question)
-
-    # Deterministic answers for structured operational questions
-    if should_use_deterministic_answer(resolved_question, selected_tools):
-        deterministic_parts = []
-
-        if "inventory" in tool_results and tool_results["inventory"]["display_df"] is not None:
-            inv_answer = generate_inventory_answer(
-                resolved_question, tool_results["inventory"]["display_df"]
-            )
-            if inv_answer:
-                deterministic_parts.append(inv_answer)
-
-        if "shipment" in tool_results and tool_results["shipment"]["display_df"] is not None:
-            ship_answer = generate_shipment_answer(
-                resolved_question, tool_results["shipment"]["display_df"]
-            )
-            if ship_answer:
-                deterministic_parts.append(ship_answer)
-
-        if deterministic_parts:
-            final_answer = " ".join(deterministic_parts)
-            used_sources = ", ".join(selected_tools)
-            final_answer += f" Data source used: {used_sources}."
-            return final_answer, selected_tools, tool_results, resolved_question
-
-    # LLM path for document/mixed/explanatory queries
-    combined_context = "\n\n".join(
-        [
-            f"{tool_name.upper()} DATA:\n{tool_result['text_output']}"
-            for tool_name, tool_result in tool_results.items()
-        ]
-    )
-
-    chat_history_text = build_chat_history_text()
-
-    prompt = f"""
-You are a private warehouse AI copilot for an electronics e-commerce fulfillment warehouse.
-
-Use only the tool results below to answer the user's question.
-If the answer is not available, clearly say that it is not available.
-Use exact values from the data whenever possible.
-Do not make vague statements if exact rows are available.
-
-CHAT HISTORY:
-{chat_history_text}
-
-RESOLVED QUESTION:
-{resolved_question}
-
-{combined_context}
-
-Give a short, clear, business-friendly answer.
-If a product location, supplier, quantity, shipment status, or document instruction is available, mention the exact value.
-Also mention which data source you used: inventory, shipment, document, or a combination.
-"""
-
-    response = llm.invoke(prompt)
-    return response.content, selected_tools, tool_results, resolved_question
-
-
-# -----------------------------
-# ANALYTICS + ALERTS + RECOMMENDATIONS
+# ANALYTICS + ALERTS
 # -----------------------------
 def build_dashboard_metrics():
     products_df = get_products_df()
@@ -460,6 +91,7 @@ def build_dashboard_metrics():
     )
 
     monthly_sales = sales_df.groupby("month", as_index=False)["units_sold"].sum()
+
     product_sales = (
         sales_df.groupby("product", as_index=False)["units_sold"]
         .sum()
@@ -492,11 +124,9 @@ def build_alerts_and_recommendations(dashboard):
 
     if not low_stock_df.empty:
         alerts.append(f"{len(low_stock_df)} items are below reorder threshold.")
-
         critical_items = low_stock_df.sort_values(by="quantity").head(3)
         critical_names = ", ".join(critical_items["name"].tolist())
         alerts.append(f"Critical low-stock items: {critical_names}.")
-
         recommendations.append(
             "Prioritize restocking the lowest-quantity items first: "
             + ", ".join(critical_items["name"].tolist()) + "."
@@ -585,14 +215,14 @@ with tab1:
 
 with tab2:
     st.subheader("AI Copilot")
-    st.write("Ask questions about stock, suppliers, locations, shipments, or warehouse documents.")
+    st.write("Ask questions about stock, suppliers, locations, shipments, warehouse documents, and restock priority.")
 
     with st.expander("Sample Questions"):
         st.write("- Which items are below reorder threshold?")
         st.write("- Which shipments are delayed?")
-        st.write("- Where is Wireless Mouse stored?")
         st.write("- What is the process for damaged goods?")
-        st.write("- Which items need restocking and what is the delayed shipment process?")
+        st.write("- Which items should be restocked first?")
+        st.write("- Which low stock items are affected by delayed shipments?")
 
     if st.session_state.chat_history:
         st.subheader("Recent Conversation")
@@ -614,8 +244,6 @@ with tab2:
 
     if clear_clicked:
         st.session_state.chat_history = []
-        st.session_state.last_user_question = ""
-        st.session_state.last_inventory_result_df = None
         st.success("Chat history cleared.")
         st.rerun()
 
@@ -625,25 +253,25 @@ with tab2:
         else:
             with st.spinner("Thinking..."):
                 try:
-                    final_answer, selected_tools, tool_results, resolved_question = run_agentic_flow(question)
+                    final_answer, selected_tools, tool_results, resolved_question = run_langgraph_question(question)
 
                     st.session_state.chat_history.append({"role": "user", "content": question})
                     st.session_state.chat_history.append({"role": "assistant", "content": final_answer})
-                    st.session_state.last_user_question = question
 
                     st.success("Answer:")
-                    st.write(final_answer)
+                    st.markdown(final_answer)
 
                     st.info(f"Resolved question: {resolved_question}")
-                    st.info(f"Planner selected tools: {', '.join(selected_tools)}")
+                    st.info(f"LangGraph selected tools: {', '.join(selected_tools)}")
 
                     st.subheader("Structured Results")
                     shown_any_table = False
 
                     for tool_name, tool_result in tool_results.items():
-                        if tool_result["display_df"] is not None:
+                        display_df = tool_result.get("display_df")
+                        if display_df is not None:
                             st.markdown(f"### {tool_name.title()} Results")
-                            st.dataframe(tool_result["display_df"], width="stretch")
+                            st.dataframe(display_df, width="stretch")
                             shown_any_table = True
 
                     if not shown_any_table:
@@ -652,7 +280,7 @@ with tab2:
                     with st.expander("See raw tool outputs"):
                         for tool_name, tool_result in tool_results.items():
                             st.markdown(f"### {tool_name.title()} Tool Output")
-                            st.text(tool_result["text_output"])
+                            st.text(tool_result.get("text_output", ""))
 
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -743,37 +371,38 @@ with tab6:
 **Private Agentic AI Copilot for Warehouse Operations**
 
 ### Problem Statement
-Warehouse operations data is often split across inventory tables, shipment records, and operational documents. Staff must manually search across multiple sources to answer common operational questions.
+Warehouse operations data is often split across inventory tables, shipment records, and operational documents. Staff must manually search across multiple sources to answer common operational questions and prioritize action.
 
 ### Proposed Solution
 This project builds a private local AI copilot that:
 - reads structured warehouse data
 - retrieves warehouse knowledge documents
-- uses a planner to select the right tools
-- returns grounded responses through a local LLM
+- uses LangGraph to orchestrate multi-agent routing
+- includes decision intelligence for restock prioritization
+- returns grounded responses through graph-driven execution
 
 ### Key Features
 - Inventory admin module
-- AI copilot with follow-up memory
+- AI copilot with LangGraph orchestration
 - Warehouse knowledge base
 - Analytics dashboard
 - Smart alerts and recommendations
-- Private local LLM using Ollama
+- Decision support for restock priority
+- Private local architecture
 
 ### Agentic AI Aspect
-The system is agentic because it does not answer blindly. It first analyzes the question, selects relevant tools such as inventory, shipment, or document retrieval, gathers the required data, and then generates the final response.
+The system is agentic because it does not answer blindly. It analyzes the question, routes it through graph nodes such as inventory, shipment, document, and decision intelligence, gathers relevant data, and produces a final grounded response.
 
 ### Privacy Aspect
 - local database
 - local documents
-- local LLM
-- no cloud API required
+- local LLM-compatible architecture
+- no cloud API required for core data
 
 ### Tech Stack
 - Python
 - Streamlit
 - SQLite
-- Ollama
-- LangChain-Ollama
+- LangGraph
 - Pandas
 """)
