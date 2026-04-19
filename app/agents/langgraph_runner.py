@@ -3,32 +3,71 @@ from app.agents.langgraph_flow import build_langgraph
 graph = build_langgraph()
 
 
-def format_inventory_answer(tool_results):
+def format_inventory_answer(question, tool_results):
     inventory_result = tool_results.get("inventory", {})
     display_df = inventory_result.get("display_df")
 
     if display_df is None or display_df.empty:
-        return "No inventory items need immediate restocking."
+        return "No inventory data is available."
 
-    if "quantity" in display_df.columns:
-        display_df = display_df.sort_values(by="quantity", ascending=True)
+    q = question.lower().strip()
 
-    lines = []
-    if "name" in display_df.columns:
-        item_names = display_df["name"].tolist()
-        lines.append(
-            "You should restock these items immediately: "
-            + ", ".join(item_names) + "."
-        )
+    # Case 1: Low stock / restock style question
+    if any(word in q for word in ["restock", "threshold", "low stock", "urgent", "immediately"]):
+        if {"quantity", "reorder_threshold"}.issubset(display_df.columns):
+            display_df = display_df[display_df["quantity"] < display_df["reorder_threshold"]].copy()
 
-    if {"name", "quantity", "reorder_threshold"}.issubset(display_df.columns):
-        lines.append("\nMost urgent items:")
-        for _, row in display_df.iterrows():
+        if display_df.empty:
+            return "No inventory items need immediate restocking."
+
+        if "quantity" in display_df.columns:
+            display_df = display_df.sort_values(by="quantity", ascending=True)
+
+        lines = []
+        if "name" in display_df.columns:
+            item_names = display_df["name"].tolist()
             lines.append(
-                f"- {row['name']}: current stock {row['quantity']}, reorder threshold {row['reorder_threshold']}"
+                "You should restock these items immediately: "
+                + ", ".join(item_names) + "."
             )
 
-    return "\n".join(lines)
+        if {"name", "quantity", "reorder_threshold"}.issubset(display_df.columns):
+            lines.append("\nMost urgent items:")
+            for _, row in display_df.head(5).iterrows():
+                lines.append(
+                    f"- {row['name']}: current stock {row['quantity']}, reorder threshold {row['reorder_threshold']}"
+                )
+
+        return "\n".join(lines)
+
+    # Case 2: Supplier question
+    if "supplier" in q:
+        if {"name", "supplier"}.issubset(display_df.columns):
+            lines = ["Here are the warehouse products and their suppliers:"]
+            for _, row in display_df.iterrows():
+                lines.append(f"- {row['name']}: supplier {row['supplier']}")
+            return "\n".join(lines)
+
+    # Case 3: Location / storage question
+    if any(word in q for word in ["where", "location", "stored"]):
+        if {"name", "location"}.issubset(display_df.columns):
+            lines = ["Here are the warehouse products and their locations:"]
+            for _, row in display_df.iterrows():
+                lines.append(f"- {row['name']}: stored at {row['location']}")
+            return "\n".join(lines)
+
+    # Case 4: General product list question
+    if any(word in q for word in ["what products", "products are there", "inventory list", "all products", "items are there"]):
+        if "name" in display_df.columns:
+            product_names = display_df["name"].tolist()
+            return "The products currently available in the warehouse are: " + ", ".join(product_names) + "."
+
+    # Default generic inventory answer
+    if "name" in display_df.columns:
+        product_names = display_df["name"].tolist()
+        return "Here is the current warehouse inventory: " + ", ".join(product_names) + "."
+
+    return "Inventory results are available in the table below."
 
 
 def format_shipment_answer(tool_results):
@@ -81,7 +120,7 @@ def format_document_answer(tool_results):
 
     final_text = " ".join(cleaned_lines)
 
-    return f"Damaged goods handling process:\n\n{final_text}"
+    return f"Warehouse process summary:\n\n{final_text}"
 
 
 def format_decision_answer(tool_results):
@@ -98,7 +137,7 @@ def format_decision_answer(tool_results):
     return "I could not generate a decision recommendation."
 
 
-def polish_answer(selected_tools, tool_results, final_answer):
+def polish_answer(question, selected_tools, tool_results, final_answer):
     final_answer = (final_answer or "").strip()
 
     raw_prefixes = [
@@ -114,7 +153,7 @@ def polish_answer(selected_tools, tool_results, final_answer):
         polished_parts = []
 
         if "inventory" in selected_tools:
-            polished_parts.append(format_inventory_answer(tool_results))
+            polished_parts.append(format_inventory_answer(question, tool_results))
 
         if "shipment" in selected_tools:
             polished_parts.append(format_shipment_answer(tool_results))
@@ -141,6 +180,6 @@ def run_langgraph_question(question: str):
     final_answer = result.get("final_answer", "")
     resolved_question = result.get("resolved_question", question)
 
-    final_answer = polish_answer(selected_tools, tool_results, final_answer)
+    final_answer = polish_answer(resolved_question, selected_tools, tool_results, final_answer)
 
     return final_answer, selected_tools, tool_results, resolved_question

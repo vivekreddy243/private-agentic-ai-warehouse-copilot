@@ -39,7 +39,15 @@ def planner_node(state: WarehouseAgentState) -> WarehouseAgentState:
         "affected by delayed shipments",
         "what should i do",
         "urgent",
-        "immediately"
+        "immediately",
+        "risk score",
+        "demand trend",
+        "demand forecast",
+        "forecast",
+        "high demand",
+        "priority score",
+        "restock risk",
+        "recent trends"
     ]
 
     selected = []
@@ -56,7 +64,6 @@ def planner_node(state: WarehouseAgentState) -> WarehouseAgentState:
     if any(word in q for word in decision_words):
         selected.append("decision")
 
-    # remove duplicates, keep order
     selected = list(dict.fromkeys(selected))
 
     if not selected:
