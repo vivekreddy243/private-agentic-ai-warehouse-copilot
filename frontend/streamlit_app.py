@@ -2,7 +2,6 @@ import sys
 from pathlib import Path
 import sqlite3
 
-# Make project root importable so "app.agents..." works in Streamlit
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
@@ -11,6 +10,8 @@ import streamlit as st
 import pandas as pd
 from app.agents.langgraph_runner import run_langgraph_question
 from app.agents.tool_helpers import evaluate_forecast_model
+from app.services.dynamic_query_engine import answer_dynamic_question
+from app.services.local_router import classify_route, get_out_of_scope_response
 
 DB_PATH = "data/warehouse.db"
 DOCS_DIR = Path("data/docs")
@@ -22,9 +23,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# -----------------------------
-# CUSTOM CSS
-# -----------------------------
 st.markdown("""
 <style>
 .main-title {
@@ -64,14 +62,6 @@ st.markdown("""
     margin-top: 0.4rem;
     margin-bottom: 0.6rem;
 }
-.section-box {
-    background-color: #ffffff;
-    padding: 1rem 1rem;
-    border-radius: 16px;
-    border: 1px solid #e5e7eb;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.03);
-    margin-bottom: 1rem;
-}
 .user-msg {
     background: #eff6ff;
     padding: 0.85rem 1rem;
@@ -93,104 +83,129 @@ st.markdown("""
     font-size: 0.9rem;
     color: #64748b;
 }
-.block-title {
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: #0f172a;
-    margin-bottom: 0.5rem;
-}
-hr {
-    margin-top: 0.6rem;
-    margin-bottom: 0.8rem;
-}
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------
-# SESSION STATE
-# -----------------------------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# -----------------------------
-# DATABASE HELPERS
-# -----------------------------
-def get_products_df():
+def safe_table_df(table_name: str) -> pd.DataFrame:
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM products", conn)
-    conn.close()
-    return df
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,)
+        )
+        exists = cur.fetchone() is not None
+        if not exists:
+            return pd.DataFrame()
+        return pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+    finally:
+        conn.close()
 
+def get_products_df():
+    return safe_table_df("products")
 
 def get_shipments_df():
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM shipments", conn)
-    conn.close()
-    return df
-
+    return safe_table_df("shipments")
 
 def get_sales_df():
-    sales_data = [
-        {"product": "Wireless Mouse", "category": "Electronics", "month": "Jan", "units_sold": 32},
-        {"product": "Wireless Mouse", "category": "Electronics", "month": "Feb", "units_sold": 28},
-        {"product": "Wireless Mouse", "category": "Electronics", "month": "Mar", "units_sold": 35},
-        {"product": "Mechanical Keyboard", "category": "Electronics", "month": "Jan", "units_sold": 20},
-        {"product": "Mechanical Keyboard", "category": "Electronics", "month": "Feb", "units_sold": 18},
-        {"product": "Mechanical Keyboard", "category": "Electronics", "month": "Mar", "units_sold": 22},
-        {"product": "Portable SSD", "category": "Electronics", "month": "Jan", "units_sold": 12},
-        {"product": "Portable SSD", "category": "Electronics", "month": "Feb", "units_sold": 15},
-        {"product": "Portable SSD", "category": "Electronics", "month": "Mar", "units_sold": 19},
-        {"product": "Thermal Printer", "category": "Warehouse Supplies", "month": "Jan", "units_sold": 4},
-        {"product": "Thermal Printer", "category": "Warehouse Supplies", "month": "Feb", "units_sold": 3},
-        {"product": "Thermal Printer", "category": "Warehouse Supplies", "month": "Mar", "units_sold": 5},
-        {"product": "Barcode Scanner", "category": "Warehouse Supplies", "month": "Jan", "units_sold": 5},
-        {"product": "Barcode Scanner", "category": "Warehouse Supplies", "month": "Feb", "units_sold": 6},
-        {"product": "Barcode Scanner", "category": "Warehouse Supplies", "month": "Mar", "units_sold": 7},
-    ]
-    return pd.DataFrame(sales_data)
+    return safe_table_df("sales")
 
+def get_outflow_df():
+    return safe_table_df("outflow")
 
-# -----------------------------
-# ANALYTICS + ALERTS
-# -----------------------------
+def get_inflow_df():
+    return safe_table_df("inflow")
+
 def build_dashboard_metrics():
     products_df = get_products_df()
     shipments_df = get_shipments_df()
     sales_df = get_sales_df()
+    outflow_df = get_outflow_df()
+    inflow_df = get_inflow_df()
 
-    total_products = len(products_df)
-    low_stock_df = products_df[products_df["quantity"] < products_df["reorder_threshold"]]
-    low_stock_count = len(low_stock_df)
+    total_products = len(products_df) if not products_df.empty else 0
 
-    delayed_shipments_df = shipments_df[shipments_df["status"].str.lower() == "delayed"]
-    delayed_shipments_count = len(delayed_shipments_df)
+    low_stock_df = pd.DataFrame()
+    low_stock_count = 0
+    total_suppliers = 0
+    category_summary = pd.DataFrame()
+    supplier_summary = pd.DataFrame()
 
-    total_suppliers = products_df["supplier"].nunique()
+    if not products_df.empty:
+        low_stock_df = products_df[products_df["quantity"] < products_df["reorder_threshold"]].copy()
+        low_stock_count = len(low_stock_df)
+        total_suppliers = products_df["supplier"].nunique()
 
-    category_summary = (
-        products_df.groupby("category", as_index=False)["quantity"]
-        .sum()
-        .sort_values(by="quantity", ascending=False)
-    )
+        category_summary = (
+            products_df.groupby("category", as_index=False)["quantity"]
+            .sum()
+            .sort_values(by="quantity", ascending=False)
+        )
 
-    supplier_summary = (
-        products_df.groupby("supplier", as_index=False)["quantity"]
-        .sum()
-        .sort_values(by="quantity", ascending=False)
-    )
+        supplier_summary = (
+            products_df.groupby("supplier", as_index=False)["quantity"]
+            .sum()
+            .sort_values(by="quantity", ascending=False)
+        )
 
-    monthly_sales = sales_df.groupby("month", as_index=False)["units_sold"].sum()
+    delayed_shipments_df = pd.DataFrame()
+    delayed_shipments_count = 0
+    if not shipments_df.empty:
+        delayed_shipments_df = shipments_df[
+            shipments_df["status"].astype(str).str.lower() == "delayed"
+        ].copy()
+        delayed_shipments_count = len(delayed_shipments_df)
 
-    product_sales = (
-        sales_df.groupby("product", as_index=False)["units_sold"]
-        .sum()
-        .sort_values(by="units_sold", ascending=False)
-    )
+    monthly_sales = pd.DataFrame(columns=["month", "quantity_sold"])
+    product_sales = pd.DataFrame(columns=["name", "quantity_sold"])
+
+    if not sales_df.empty:
+        sales_df["sale_date"] = pd.to_datetime(sales_df["sale_date"], errors="coerce")
+        sales_df = sales_df.dropna(subset=["sale_date"]).copy()
+        sales_df["month"] = sales_df["sale_date"].dt.strftime("%b")
+
+        monthly_sales = (
+            sales_df.groupby("month", as_index=False)["quantity_sold"]
+            .sum()
+        )
+
+        product_sales = (
+            sales_df.groupby("name", as_index=False)["quantity_sold"]
+            .sum()
+            .sort_values(by="quantity_sold", ascending=False)
+        )
+
+    monthly_outflow = pd.DataFrame(columns=["month", "quantity_out"])
+    if not outflow_df.empty:
+        outflow_df["outflow_date"] = pd.to_datetime(outflow_df["outflow_date"], errors="coerce")
+        outflow_df = outflow_df.dropna(subset=["outflow_date"]).copy()
+        outflow_df["month"] = outflow_df["outflow_date"].dt.strftime("%b")
+
+        monthly_outflow = (
+            outflow_df.groupby("month", as_index=False)["quantity_out"]
+            .sum()
+        )
+
+    monthly_inflow = pd.DataFrame(columns=["month", "quantity_in"])
+    if not inflow_df.empty:
+        inflow_df["inflow_date"] = pd.to_datetime(inflow_df["inflow_date"], errors="coerce")
+        inflow_df = inflow_df.dropna(subset=["inflow_date"]).copy()
+        inflow_df["month"] = inflow_df["inflow_date"].dt.strftime("%b")
+
+        monthly_inflow = (
+            inflow_df.groupby("month", as_index=False)["quantity_in"]
+            .sum()
+        )
 
     return {
         "products_df": products_df,
         "shipments_df": shipments_df,
         "sales_df": sales_df,
+        "outflow_df": outflow_df,
+        "inflow_df": inflow_df,
         "low_stock_df": low_stock_df,
         "delayed_shipments_df": delayed_shipments_df,
         "total_products": total_products,
@@ -201,8 +216,9 @@ def build_dashboard_metrics():
         "supplier_summary": supplier_summary,
         "monthly_sales": monthly_sales,
         "product_sales": product_sales,
+        "monthly_outflow": monthly_outflow,
+        "monthly_inflow": monthly_inflow,
     }
-
 
 def build_alerts_and_recommendations(dashboard):
     alerts = []
@@ -223,21 +239,21 @@ def build_alerts_and_recommendations(dashboard):
 
     if not delayed_shipments_df.empty:
         alerts.append(f"{len(delayed_shipments_df)} shipments are currently delayed.")
-        delayed_suppliers = ", ".join(delayed_shipments_df["supplier"].unique().tolist())
+        delayed_suppliers = ", ".join(delayed_shipments_df["supplier"].dropna().unique().tolist())
         recommendations.append(
             f"Follow up with delayed shipment suppliers: {delayed_suppliers}."
         )
 
     if not low_stock_df.empty and not delayed_shipments_df.empty:
         recommendations.append(
-            "Review whether delayed supplier shipments are affecting replenishment for low-stock products."
+            "Review whether delayed shipments are affecting low-stock products."
         )
 
-    if dashboard["product_sales"].shape[0] > 0:
+    if not dashboard["product_sales"].empty:
         top_sales = dashboard["product_sales"].head(3)
         recommendations.append(
             "Top-selling products to monitor closely: "
-            + ", ".join(top_sales["product"].tolist()) + "."
+            + ", ".join(top_sales["name"].tolist()) + "."
         )
 
     if not alerts:
@@ -248,32 +264,30 @@ def build_alerts_and_recommendations(dashboard):
 
     return alerts, recommendations
 
-
 def get_system_status():
     db_ok = Path(DB_PATH).exists()
     docs_count = len([f for f in DOCS_DIR.iterdir() if f.is_file()]) if DOCS_DIR.exists() else 0
 
-    ml_eval = evaluate_forecast_model()
-    metrics = ml_eval.get("metrics", {})
+    try:
+        ml_eval = evaluate_forecast_model()
+        metrics = ml_eval.get("metrics", {})
+    except Exception:
+        metrics = {}
 
     return {
         "db_status": "Connected" if db_ok else "Missing",
         "docs_count": docs_count,
         "routing_accuracy": "90.0%",
-        "ml_mae": metrics.get("MAE"),
-        "ml_mse": metrics.get("MSE"),
-        "ml_r2": metrics.get("R2"),
+        "ml_mae": metrics.get("MAE", "N/A"),
+        "ml_mse": metrics.get("MSE", "N/A"),
+        "ml_r2": metrics.get("R2", "N/A"),
     }
 
-
-# -----------------------------
-# HEADER
-# -----------------------------
 dashboard = build_dashboard_metrics()
 
 st.markdown('<div class="main-title">Agentic AI Warehouse Copilot</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">Intelligent warehouse operations assistant for inventory visibility, shipment monitoring, SOP retrieval, and ML-based restock prioritization.</div>',
+    '<div class="sub-title">Intelligent warehouse operations assistant for inventory visibility, shipment monitoring, sales/outflow tracking, SOP retrieval, and demand-aware restock decisions.</div>',
     unsafe_allow_html=True
 )
 
@@ -301,9 +315,6 @@ with m4:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# -----------------------------
-# UI TABS
-# -----------------------------
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
     [
         "📦 Inventory",
@@ -316,9 +327,6 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
     ]
 )
 
-# -----------------------------
-# TAB 1: INVENTORY
-# -----------------------------
 with tab1:
     st.subheader("Inventory Management")
     st.write("View current inventory and manage warehouse products.")
@@ -362,12 +370,9 @@ with tab1:
                 except sqlite3.IntegrityError:
                     st.error("SKU already exists. Please use a unique SKU.")
 
-# -----------------------------
-# TAB 2: AI COPILOT
-# -----------------------------
 with tab2:
     st.subheader("AI Copilot")
-    st.write("Ask warehouse questions across inventory, shipments, documents, and restock intelligence.")
+    st.write("Ask warehouse questions across inventory, shipments, sales, inflow, outflow, documents, and restock intelligence.")
 
     s1, s2 = st.columns(2)
     with s1:
@@ -375,11 +380,13 @@ with tab2:
         st.markdown("- What products are there in the warehouse?")
         st.markdown("- What items should I restock immediately?")
         st.markdown("- Which shipments are delayed?")
+        st.markdown("- What are the sales this month?")
     with s2:
         st.markdown("### More Examples")
-        st.markdown("- What is the process for damaged goods?")
-        st.markdown("- Which items have the highest restock risk?")
-        st.markdown("- Which low stock items are affected by delayed shipments?")
+        st.markdown("- What is the outflow this month?")
+        st.markdown("- What is the inflow this month?")
+        st.markdown("- Which supplier affects low stock the most?")
+        st.markdown("- What is SKU?")
 
     if st.session_state.chat_history:
         st.markdown("### Recent Conversation")
@@ -395,15 +402,18 @@ with tab2:
                     unsafe_allow_html=True
                 )
 
-    question = st.text_input("Ask a warehouse question", placeholder="Example: Which items have the highest restock risk?")
+    question = st.text_input(
+        "Ask a warehouse question",
+        placeholder="Example: What are the sales this month?"
+    )
 
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        submit_clicked = st.button("Submit Question", use_container_width=True)
+        submit_clicked = st.button("Submit Question", width="stretch")
 
     with col2:
-        clear_clicked = st.button("Clear Chat History", use_container_width=True)
+        clear_clicked = st.button("Clear Chat History", width="stretch")
 
     if clear_clicked:
         st.session_state.chat_history = []
@@ -416,68 +426,212 @@ with tab2:
         else:
             with st.spinner("Thinking..."):
                 try:
-                    final_answer, selected_tools, tool_results, resolved_question = run_langgraph_question(question)
+                    resolved_question = question
+                    route_info = classify_route(question)
+                    route = route_info["route"]
 
-                    st.session_state.chat_history.append({"role": "user", "content": question})
-                    st.session_state.chat_history.append({"role": "assistant", "content": final_answer})
+                    if route == "out_of_scope":
+                        final_answer = get_out_of_scope_response()
 
-                    st.markdown("### Answer")
-                    st.markdown(f'<div class="answer-box">{final_answer}</div>', unsafe_allow_html=True)
+                        st.session_state.chat_history.append({"role": "user", "content": question})
+                        st.session_state.chat_history.append({"role": "assistant", "content": final_answer})
 
-                    with st.expander("See reasoning details"):
-                        st.write(f"Resolved question: {resolved_question}")
-                        st.write(f"LangGraph selected tools: {', '.join(selected_tools)}")
+                        st.markdown("### Answer")
+                        st.markdown(f'<div class="answer-box">{final_answer}</div>', unsafe_allow_html=True)
+                        with st.expander("See reasoning details"):
+                            st.write(f"Resolved question: {resolved_question}")
+                            st.write(f"Route selected: {route}")
+                            st.write(f"Route confidence: {route_info['confidence']}")
+                            if route_info.get("matched_example"):
+                                st.write(f"Closest route example: {route_info['matched_example']}")
 
-                    st.markdown("### Structured Results")
-                    shown_any_table = False
-
-                    for tool_name, tool_result in tool_results.items():
-                        display_df = tool_result.get("display_df")
-                        if display_df is not None:
-                            st.markdown(f"#### {tool_name.title()} Results")
-                            st.dataframe(display_df, width="stretch")
-                            shown_any_table = True
-
-                    if not shown_any_table:
+                        st.markdown("### Structured Results")
                         st.info("No tabular results available for this query.")
 
-                    with st.expander("See raw tool outputs"):
+                    elif route == "document":
+                        final_answer, selected_tools, tool_results, resolved_question = run_langgraph_question(question)
+
+                        st.session_state.chat_history.append({"role": "user", "content": question})
+                        st.session_state.chat_history.append({"role": "assistant", "content": final_answer})
+
+                        st.markdown("### Answer")
+                        st.markdown(f'<div class="answer-box">{final_answer}</div>', unsafe_allow_html=True)
+
+                        with st.expander("See reasoning details"):
+                            st.write(f"Resolved question: {resolved_question}")
+                            st.write(f"Route selected: {route}")
+                            st.write(f"Route confidence: {route_info['confidence']}")
+                            if route_info.get("matched_example"):
+                                st.write(f"Closest route example: {route_info['matched_example']}")
+                            st.write(f"LangGraph tools used: {', '.join(selected_tools)}")
+
+                        st.markdown("### Structured Results")
+                        shown_any_table = False
                         for tool_name, tool_result in tool_results.items():
-                            st.markdown(f"#### {tool_name.title()} Tool Output")
-                            st.text(tool_result.get("text_output", ""))
+                            display_df = tool_result.get("display_df")
+                            if display_df is not None and not display_df.empty:
+                                st.markdown(f"#### {tool_name.title()} Results")
+                                st.dataframe(display_df, width="stretch")
+                                shown_any_table = True
+
+                        if not shown_any_table:
+                            st.info("No tabular results available for this query.")
+
+                    else:
+                        final_answer, direct_tables, structured_meta = answer_dynamic_question(question)
+
+                        st.session_state.chat_history.append({"role": "user", "content": question})
+                        st.session_state.chat_history.append({"role": "assistant", "content": final_answer})
+
+                        st.markdown("### Answer")
+                        st.markdown(f'<div class="answer-box">{final_answer}</div>', unsafe_allow_html=True)
+
+                        with st.expander("See reasoning details"):
+                            st.write(f"Resolved question: {resolved_question}")
+                            st.write(f"Route selected: {route}")
+                            st.write(f"Route confidence: {route_info['confidence']}")
+                            if route_info.get("matched_example"):
+                                st.write(f"Closest route example: {route_info['matched_example']}")
+                            st.write(f"Detected structured intent: {structured_meta['intent']}")
+                            st.write(f"Extracted entities: {structured_meta['entities']}")
+                            st.write(f"Intent confidence: {structured_meta['confidence']}")
+                            st.write(f"SQL template used: {structured_meta['sql_template']}")
+
+                        st.markdown("### Structured Results")
+                        shown_any_table = False
+                        for title, display_df in direct_tables.items():
+                            if display_df is not None and not display_df.empty:
+                                st.markdown(f"#### {title}")
+                                st.dataframe(display_df, width="stretch")
+                                shown_any_table = True
+
+                        if not shown_any_table:
+                            st.info("No tabular results available for this query.")
 
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-# -----------------------------
-# TAB 3: KNOWLEDGE BASE
-# -----------------------------
 with tab3:
     st.subheader("Warehouse Knowledge Base")
-    st.write("Upload local warehouse SOPs, supplier notes, and policy documents.")
+    st.write("Upload local warehouse SOPs, supplier notes, policy documents, or structured inventory/sales/inflow/outflow CSV files.")
 
-    uploaded_file = st.file_uploader("Upload a text document", type=["txt"])
+    upload_type = st.selectbox(
+        "Select upload type",
+        ["Document (.txt)", "Inventory CSV", "Sales CSV", "Inflow CSV", "Outflow CSV"]
+    )
 
-    if uploaded_file is not None:
-        save_path = DOCS_DIR / uploaded_file.name
-        with open(save_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        st.success(f"Uploaded: {uploaded_file.name}")
+    if upload_type == "Document (.txt)":
+        uploaded_file = st.file_uploader("Upload a text document", type=["txt"], key="txt_upload")
+
+        if uploaded_file is not None:
+            save_path = DOCS_DIR / uploaded_file.name
+            with open(save_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            st.success(f"Document uploaded: {uploaded_file.name}")
+
+    elif upload_type == "Inventory CSV":
+        uploaded_file = st.file_uploader("Upload inventory CSV", type=["csv"], key="inventory_csv_upload")
+
+        if uploaded_file is not None:
+            try:
+                inventory_df = pd.read_csv(uploaded_file)
+
+                required_cols = {"sku", "name", "category", "quantity", "reorder_threshold", "location", "supplier"}
+                if not required_cols.issubset(set(inventory_df.columns)):
+                    st.error(f"Inventory CSV must contain columns: {sorted(required_cols)}")
+                else:
+                    conn = sqlite3.connect(DB_PATH)
+                    inventory_df.to_sql("products", conn, if_exists="append", index=False)
+                    conn.close()
+                    st.success(f"Inventory data uploaded successfully. Inserted {len(inventory_df)} rows.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to upload inventory CSV: {e}")
+
+    elif upload_type == "Sales CSV":
+        uploaded_file = st.file_uploader("Upload sales CSV", type=["csv"], key="sales_csv_upload")
+
+        if uploaded_file is not None:
+            try:
+                sales_df = pd.read_csv(uploaded_file)
+
+                required_cols = {"sku", "name", "quantity_sold", "revenue", "sale_date"}
+                if not required_cols.issubset(set(sales_df.columns)):
+                    st.error(f"Sales CSV must contain columns: {sorted(required_cols)}")
+                else:
+                    conn = sqlite3.connect(DB_PATH)
+                    sales_df.to_sql("sales", conn, if_exists="append", index=False)
+                    conn.close()
+                    st.success(f"Sales data uploaded successfully. Inserted {len(sales_df)} rows.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to upload sales CSV: {e}")
+
+    elif upload_type == "Inflow CSV":
+        uploaded_file = st.file_uploader("Upload inflow CSV", type=["csv"], key="inflow_csv_upload")
+
+        if uploaded_file is not None:
+            try:
+                inflow_df = pd.read_csv(uploaded_file)
+
+                required_cols = {"sku", "name", "quantity_in", "source", "inflow_date"}
+                if not required_cols.issubset(set(inflow_df.columns)):
+                    st.error(f"Inflow CSV must contain columns: {sorted(required_cols)}")
+                else:
+                    conn = sqlite3.connect(DB_PATH)
+                    inflow_df.to_sql("inflow", conn, if_exists="append", index=False)
+                    conn.close()
+                    st.success(f"Inflow data uploaded successfully. Inserted {len(inflow_df)} rows.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to upload inflow CSV: {e}")
+
+    elif upload_type == "Outflow CSV":
+        uploaded_file = st.file_uploader("Upload outflow CSV", type=["csv"], key="outflow_csv_upload")
+
+        if uploaded_file is not None:
+            try:
+                outflow_df = pd.read_csv(uploaded_file)
+
+                required_cols = {"sku", "name", "quantity_out", "destination", "outflow_date"}
+                if not required_cols.issubset(set(outflow_df.columns)):
+                    st.error(f"Outflow CSV must contain columns: {sorted(required_cols)}")
+                else:
+                    conn = sqlite3.connect(DB_PATH)
+                    outflow_df.to_sql("outflow", conn, if_exists="append", index=False)
+                    conn.close()
+                    st.success(f"Outflow data uploaded successfully. Inserted {len(outflow_df)} rows.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to upload outflow CSV: {e}")
 
     st.markdown("### Available Documents")
     files = [f.name for f in DOCS_DIR.iterdir() if f.is_file()]
     if files:
         docs_df = pd.DataFrame({"Document Name": files})
-        st.dataframe(docs_df, width="stretch", height=250)
+        st.dataframe(docs_df, width="stretch", height=180)
     else:
         st.info("No documents uploaded yet.")
 
-# -----------------------------
-# TAB 4: ANALYTICS
-# -----------------------------
+    st.markdown("### Structured Data Summary")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        product_count = pd.read_sql_query("SELECT COUNT(*) AS cnt FROM products", conn)["cnt"][0]
+        sales_count = pd.read_sql_query("SELECT COUNT(*) AS cnt FROM sales", conn)["cnt"][0]
+        inflow_count = pd.read_sql_query("SELECT COUNT(*) AS cnt FROM inflow", conn)["cnt"][0]
+        outflow_count = pd.read_sql_query("SELECT COUNT(*) AS cnt FROM outflow", conn)["cnt"][0]
+    finally:
+        conn.close()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Products", product_count)
+    c2.metric("Sales Rows", sales_count)
+    c3.metric("Inflow Rows", inflow_count)
+    c4.metric("Outflow Rows", outflow_count)
+
 with tab4:
     st.subheader("Warehouse Analytics")
-    st.write("Operational overview of stock, suppliers, shipment risk, and sales trends.")
+    st.write("Operational overview of stock, shipments, sales, inflow, and outflow.")
 
     dashboard = build_dashboard_metrics()
 
@@ -492,21 +646,50 @@ with tab4:
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("Monthly Sales Trend")
-        st.line_chart(dashboard["monthly_sales"].set_index("month"))
+        if dashboard["monthly_sales"].empty:
+            st.info("Sales data not available.")
+        else:
+            st.line_chart(dashboard["monthly_sales"].set_index("month"))
+
     with c2:
         st.subheader("Product Sales Summary")
-        st.bar_chart(dashboard["product_sales"].set_index("product"))
+        if dashboard["product_sales"].empty:
+            st.info("Sales data not available.")
+        else:
+            st.bar_chart(dashboard["product_sales"].set_index("name"))
 
     c3, c4 = st.columns(2)
     with c3:
-        st.subheader("Category-wise Stock Summary")
-        st.dataframe(dashboard["category_summary"], width="stretch")
+        st.subheader("Monthly Inflow")
+        if dashboard["monthly_inflow"].empty:
+            st.info("Inflow data not available.")
+        else:
+            st.bar_chart(dashboard["monthly_inflow"].set_index("month"))
+
     with c4:
-        st.subheader("Supplier-wise Quantity Summary")
-        st.dataframe(dashboard["supplier_summary"], width="stretch")
+        st.subheader("Monthly Outflow")
+        if dashboard["monthly_outflow"].empty:
+            st.info("Outflow data not available.")
+        else:
+            st.bar_chart(dashboard["monthly_outflow"].set_index("month"))
 
     c5, c6 = st.columns(2)
     with c5:
+        st.subheader("Category-wise Stock Summary")
+        if dashboard["category_summary"].empty:
+            st.info("Category summary not available.")
+        else:
+            st.dataframe(dashboard["category_summary"], width="stretch")
+
+    with c6:
+        st.subheader("Supplier-wise Quantity Summary")
+        if dashboard["supplier_summary"].empty:
+            st.info("Supplier summary not available.")
+        else:
+            st.dataframe(dashboard["supplier_summary"], width="stretch")
+
+    c7, c8 = st.columns(2)
+    with c7:
         st.subheader("Low Stock Products")
         if dashboard["low_stock_df"].empty:
             st.success("No low stock items.")
@@ -516,19 +699,17 @@ with tab4:
                 width="stretch"
             )
 
-    with c6:
+    with c8:
         st.subheader("Delayed Shipments")
         if dashboard["delayed_shipments_df"].empty:
             st.success("No delayed shipments.")
         else:
+            available_cols = [c for c in ["shipment_id", "supplier", "status", "expected_date", "notes"] if c in dashboard["delayed_shipments_df"].columns]
             st.dataframe(
-                dashboard["delayed_shipments_df"][["shipment_id", "supplier", "status", "expected_date", "notes"]],
+                dashboard["delayed_shipments_df"][available_cols],
                 width="stretch"
             )
 
-# -----------------------------
-# TAB 5: ALERTS
-# -----------------------------
 with tab5:
     st.subheader("Smart Alerts & Recommendations")
     st.write("Operational signals derived from inventory, shipments, and sales patterns.")
@@ -537,7 +718,6 @@ with tab5:
     alerts, recommendations = build_alerts_and_recommendations(dashboard)
 
     left, right = st.columns(2)
-
     with left:
         st.markdown("### Alerts")
         for alert in alerts:
@@ -548,9 +728,6 @@ with tab5:
         for rec in recommendations:
             st.success(rec)
 
-# -----------------------------
-# TAB 6: EVALUATION
-# -----------------------------
 with tab6:
     st.subheader("System Evaluation")
     st.write("Routing and ML evaluation summary for the warehouse copilot.")
@@ -577,16 +754,15 @@ with tab6:
         st.markdown("- Forecast metrics computed using hold-out monthly demand comparison")
         st.markdown("- Model used: **Linear Regression**")
 
-    ml_eval = evaluate_forecast_model()
-    details_df = ml_eval.get("details_df")
+    try:
+        ml_eval = evaluate_forecast_model()
+        details_df = ml_eval.get("details_df")
+        if details_df is not None and not details_df.empty:
+            st.markdown("### Forecast Evaluation Details")
+            st.dataframe(details_df, width="stretch")
+    except Exception:
+        st.info("Forecast evaluation details are not available.")
 
-    if details_df is not None and not details_df.empty:
-        st.markdown("### Forecast Evaluation Details")
-        st.dataframe(details_df, width="stretch")
-
-# -----------------------------
-# TAB 7: PROJECT INFO
-# -----------------------------
 with tab7:
     st.subheader("Project Overview")
     st.write("Detailed summary of the system design, purpose, and technology stack.")
@@ -596,11 +772,12 @@ with tab7:
 **Agentic AI-Based Warehouse Copilot for Intelligent Inventory Management and Demand-Aware Restock Decision Support**
 
 ### Problem Statement
-Warehouse operations data is often split across inventory tables, shipment records, and operational documents. Staff must manually search across multiple sources to answer common operational questions and prioritize action.
+Warehouse operations data is often split across inventory tables, shipment records, operational documents, sales logs, and stock movement records. Staff must manually search across multiple sources to answer common operational questions and prioritize action.
 
 ### Proposed Solution
 This project builds a private local AI copilot that:
 - reads structured warehouse data
+- tracks sales, inflow, and outflow
 - retrieves warehouse knowledge documents
 - uses LangGraph to orchestrate multi-tool routing
 - includes decision intelligence for restock prioritization
@@ -608,15 +785,16 @@ This project builds a private local AI copilot that:
 
 ### Key Features
 - Inventory management module
-- AI copilot with multi-tool orchestration
+- AI copilot with dynamic intent detection and SQL-backed responses
 - Warehouse knowledge base
 - Analytics dashboard
 - Smart alerts and recommendations
+- Sales / inflow / outflow visibility
 - ML-based restock risk analysis
 - Private local architecture
 
 ### Agentic AI Aspect
-The system is agentic because it does not answer blindly. It analyzes the question, routes it through inventory, shipment, document, and decision pathways, gathers relevant context, and produces a grounded response.
+The system is agentic because it does not answer blindly. It analyzes the question, routes it through inventory, shipment, sales, outflow, document, and decision pathways, gathers relevant context, and produces a grounded response.
 
 ### Machine Learning Aspect
 The project uses a lightweight Linear Regression model to predict next-month demand from historical sales data. This forecast is combined with stock gap and shipment-delay risk to create a restock risk score.

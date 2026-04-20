@@ -12,3 +12,4 @@ qdrant-client
 pypdf
 python-multipart
 requests
+scikit-learn

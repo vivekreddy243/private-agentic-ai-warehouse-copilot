@@ -26,36 +26,53 @@ def get_shipments_df():
 
 
 def get_sales_df():
-    sales_data = [
-        {"product": "Wireless Mouse", "category": "Electronics", "month": "Jan", "units_sold": 32},
-        {"product": "Wireless Mouse", "category": "Electronics", "month": "Feb", "units_sold": 28},
-        {"product": "Wireless Mouse", "category": "Electronics", "month": "Mar", "units_sold": 35},
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        sales_df = pd.read_sql_query(
+            "SELECT name, quantity_sold, sale_date FROM sales",
+            conn
+        )
+    except Exception:
+        return pd.DataFrame(
+            columns=["product", "month", "month_start", "month_num", "units_sold"]
+        )
+    finally:
+        conn.close()
 
-        {"product": "Mechanical Keyboard", "category": "Electronics", "month": "Jan", "units_sold": 20},
-        {"product": "Mechanical Keyboard", "category": "Electronics", "month": "Feb", "units_sold": 18},
-        {"product": "Mechanical Keyboard", "category": "Electronics", "month": "Mar", "units_sold": 22},
+    if sales_df.empty:
+        return pd.DataFrame(
+            columns=["product", "month", "month_start", "month_num", "units_sold"]
+        )
 
-        {"product": "Portable SSD", "category": "Electronics", "month": "Jan", "units_sold": 12},
-        {"product": "Portable SSD", "category": "Electronics", "month": "Feb", "units_sold": 15},
-        {"product": "Portable SSD", "category": "Electronics", "month": "Mar", "units_sold": 19},
+    sales_df["sale_date"] = pd.to_datetime(sales_df["sale_date"], errors="coerce")
+    sales_df = sales_df.dropna(subset=["sale_date"]).copy()
 
-        {"product": "Thermal Printer", "category": "Warehouse Supplies", "month": "Jan", "units_sold": 4},
-        {"product": "Thermal Printer", "category": "Warehouse Supplies", "month": "Feb", "units_sold": 3},
-        {"product": "Thermal Printer", "category": "Warehouse Supplies", "month": "Mar", "units_sold": 5},
+    if sales_df.empty:
+        return pd.DataFrame(
+            columns=["product", "month", "month_start", "month_num", "units_sold"]
+        )
 
-        {"product": "Barcode Scanner", "category": "Warehouse Supplies", "month": "Jan", "units_sold": 5},
-        {"product": "Barcode Scanner", "category": "Warehouse Supplies", "month": "Feb", "units_sold": 6},
-        {"product": "Barcode Scanner", "category": "Warehouse Supplies", "month": "Mar", "units_sold": 7},
+    sales_df["month_start"] = sales_df["sale_date"].dt.to_period("M").dt.to_timestamp()
 
-        {"product": "Noise-Cancelling Headphones", "category": "Electronics", "month": "Jan", "units_sold": 7},
-        {"product": "Noise-Cancelling Headphones", "category": "Electronics", "month": "Feb", "units_sold": 8},
-        {"product": "Noise-Cancelling Headphones", "category": "Electronics", "month": "Mar", "units_sold": 10},
+    monthly_sales = (
+        sales_df.groupby(["name", "month_start"], as_index=False)["quantity_sold"]
+        .sum()
+        .sort_values(by=["name", "month_start"])
+    )
 
-        {"product": "Laptop Stand", "category": "Accessories", "month": "Jan", "units_sold": 6},
-        {"product": "Laptop Stand", "category": "Accessories", "month": "Feb", "units_sold": 7},
-        {"product": "Laptop Stand", "category": "Accessories", "month": "Mar", "units_sold": 9},
-    ]
-    return pd.DataFrame(sales_data)
+    month_index = {
+        month: idx
+        for idx, month in enumerate(sorted(monthly_sales["month_start"].unique()), start=1)
+    }
+
+    monthly_sales["month"] = monthly_sales["month_start"].dt.strftime("%Y-%m")
+    monthly_sales["month_num"] = monthly_sales["month_start"].map(month_index)
+
+    monthly_sales = monthly_sales.rename(
+        columns={"name": "product", "quantity_sold": "units_sold"}
+    )
+
+    return monthly_sales[["product", "month", "month_start", "month_num", "units_sold"]]
 
 
 def inventory_tool_logic(question: str):
@@ -160,9 +177,12 @@ def document_tool_logic(question: str):
 
 
 def forecast_next_month_demand(sales_df: pd.DataFrame) -> pd.DataFrame:
-    month_map = {"Jan": 1, "Feb": 2, "Mar": 3}
+    if sales_df.empty:
+        return pd.DataFrame(
+            columns=["product", "predicted_next_month_demand", "trend_slope"]
+        )
+
     df = sales_df.copy()
-    df["month_num"] = df["month"].map(month_map)
 
     forecast_rows = []
 
@@ -174,7 +194,8 @@ def forecast_next_month_demand(sales_df: pd.DataFrame) -> pd.DataFrame:
         if len(group) >= 2:
             model = LinearRegression()
             model.fit(X, y)
-            predicted = float(model.predict(np.array([[4]]))[0])
+            next_month_num = float(group["month_num"].max() + 1)
+            predicted = float(model.predict(np.array([[next_month_num]]))[0])
             trend_slope = float(model.coef_[0])
         else:
             predicted = float(group["units_sold"].iloc[-1])
@@ -297,11 +318,26 @@ def decision_tool_logic():
 
 def evaluate_forecast_model():
     sales_df = get_sales_df().copy()
-    month_map = {"Jan": 1, "Feb": 2, "Mar": 3}
-    sales_df["month_num"] = sales_df["month"].map(month_map)
 
-    train_df = sales_df[sales_df["month"] != "Mar"].copy()
-    test_df = sales_df[sales_df["month"] == "Mar"].copy()
+    if sales_df.empty or sales_df["month_num"].nunique() < 3:
+        return {
+            "metrics": {
+                "MAE": None,
+                "MSE": None,
+                "R2": None
+            },
+            "details_df": pd.DataFrame(
+                columns=["product", "predicted_latest_demand", "actual_latest_demand", "absolute_error"]
+            )
+        }
+
+    latest_month_num = sales_df["month_num"].max()
+    latest_month_label = sales_df.loc[
+        sales_df["month_num"] == latest_month_num, "month"
+    ].iloc[0]
+
+    train_df = sales_df[sales_df["month_num"] < latest_month_num].copy()
+    test_df = sales_df[sales_df["month_num"] == latest_month_num].copy()
 
     predictions = []
     actuals = []
@@ -318,7 +354,7 @@ def evaluate_forecast_model():
             model = LinearRegression()
             model.fit(X_train, y_train)
 
-            pred = float(model.predict(np.array([[3]]))[0])
+            pred = float(model.predict(np.array([[latest_month_num]]))[0])
             actual = float(test_group["units_sold"].iloc[0])
 
             predictions.append(pred)
@@ -326,8 +362,8 @@ def evaluate_forecast_model():
 
             eval_rows.append({
                 "product": product,
-                "predicted_mar_demand": round(pred, 2),
-                "actual_mar_demand": round(actual, 2),
+                "predicted_latest_demand": round(pred, 2),
+                "actual_latest_demand": round(actual, 2),
                 "absolute_error": round(abs(actual - pred), 2),
             })
 
@@ -338,7 +374,9 @@ def evaluate_forecast_model():
                 "MSE": None,
                 "R2": None
             },
-            "details_df": pd.DataFrame(columns=["product", "predicted_mar_demand", "actual_mar_demand", "absolute_error"])
+            "details_df": pd.DataFrame(
+                columns=["product", "predicted_latest_demand", "actual_latest_demand", "absolute_error"]
+            )
         }
 
     mae = mean_absolute_error(actuals, predictions)
@@ -351,5 +389,6 @@ def evaluate_forecast_model():
             "MSE": round(float(mse), 3),
             "R2": round(float(r2), 3),
         },
-        "details_df": pd.DataFrame(eval_rows)
+        "details_df": pd.DataFrame(eval_rows),
+        "evaluated_month": latest_month_label
     }
